@@ -26,6 +26,9 @@ mkdir -p "$dist/system/inkrss/fonts"
 cp "$here"/third_party/fonts/*/*.ttf "$dist/system/inkrss/fonts/"
 cp "$here/third_party/fonts/ptserif/OFL.txt" "$dist/system/inkrss/fonts/OFL-PTSerif.txt"
 cp "$here/third_party/fonts/literata/OFL.txt" "$dist/system/inkrss/fonts/OFL-Literata.txt"
+# Licence texts travel with the app.
+cp "$here/../LICENSE" "$dist/system/inkrss/LICENSE.txt"
+cp "$here/third_party/LICENSES.md" "$dist/system/inkrss/LICENSES.md"
 # Launcher icons for the Applications menu (used only if the user adds them to view.json).
 [ -f "$here/third_party/inkrss/icon.bmp" ] && cp "$here/third_party/inkrss/icon.bmp" "$dist/applications/icons/inkrss.bmp"
 [ -f "$here/third_party/inkrss/icon_f.bmp" ] && cp "$here/third_party/inkrss/icon_f.bmp" "$dist/applications/icons/inkrss_f.bmp"
