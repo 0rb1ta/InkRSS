@@ -1,0 +1,1 @@
+Vendored from https://github.com/FortAwesome/Font-Awesome tag 6.5.1, svgs/solid and svgs/regular (Font Awesome Free: icons CC BY 4.0).

@@ -1,0 +1,16 @@
+build/
+build-*/
+dist/
+*.7z
+.cache/
+.superpowers/
+tests/build/
+app/build/
+app/dist/
+__pycache__/
+photo_*.jpg
+*.part
+*.zip
+CLAUDE.local.md
+.claude/settings.local.json
+*.zip.sha256

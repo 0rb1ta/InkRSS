@@ -1,0 +1,153 @@
+<meta charset="utf-8">
+<title>InkRSS — RSS on PocketBook</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700;900&family=PT+Serif:wght@400;700&display=swap">
+<style>
+  :root {
+    --bg: #efefec; --fg: #000;
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .08 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 400 18px/1.5 Roboto, system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden;
+         min-height: 100vh; display: flex; flex-direction: column; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--grain); opacity: .7; pointer-events: none; }
+  .caps { position: fixed; inset: 0; z-index: -2; pointer-events: none; opacity: .5;
+          background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,.09) .8px, transparent 1.2px); background-size: 4px 4px; }
+
+  header { display: flex; justify-content: space-between; align-items: center; padding: 22px 6vw 0; }
+  .brand svg { height: 46px; width: auto; display: block; }
+  .right { display: flex; gap: 12px; align-items: center; }
+  .lang { display: flex; border: 2px solid #000; border-radius: 8px; overflow: hidden; }
+  .lang button { font: 700 14px Roboto; border: 0; background: transparent; padding: 7px 11px; cursor: pointer; }
+  .lang button.on { background: #000; color: var(--bg); }
+  .gh { font-weight: 700; font-size: 15px; text-decoration: none; color: #000; border: 2px solid #000; border-radius: 8px; padding: 7px 14px; }
+
+  main { flex: 1; display: grid; grid-template-columns: auto minmax(320px, 520px); gap: 11vw; align-items: center; justify-content: center; padding: 30px 6vw 50px; }
+
+  /* White PocketBook 970: 173 x 236.2 mm body, 825x1200 panel with even bezels */
+  .stage { perspective: 1800px; padding-left: 3vw; }
+  .pb { --h: min(70vh, 780px, 48vw); height: var(--h); aspect-ratio: 173 / 236.2; position: relative; border-radius: 4.6% / 3.4%;
+        transform: rotateY(28deg) rotateX(4deg) rotateZ(-1deg);
+        background: radial-gradient(130% 70% at 20% 0%, #ffffff, transparent 60%), linear-gradient(160deg, #fbfbfa, #ecebe8 55%, #dedcd8);
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,.08), inset 0 2px 0 #fff, -3px 2px 0 #cfcdc8, -7px 4px 0 #c9c7c2, -11px 6px 0 #bfbdb8,
+                    0 50px 80px -30px rgba(0,0,0,.45), 0 20px 30px -18px rgba(0,0,0,.3); }
+  .glass { position: absolute; left: 9.65%; right: 9.65%; top: 7.03%; bottom: 7.03%; overflow: hidden; background: #ecece8;
+           box-shadow: 0 0 0 1.5px #bdbbb6, inset 0 2px 6px rgba(0,0,0,.18); }
+  .glass::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+                  background: linear-gradient(118deg, rgba(255,255,255,.35) 0 24%, rgba(255,255,255,0) 24.3%, rgba(255,255,255,0) 72%, rgba(255,255,255,.12)); }
+  .logo-pb { position: absolute; bottom: 2.4%; left: 0; right: 0; text-align: center; font: 700 1.1vh Roboto; letter-spacing: .3em; color: #9a9893; }
+
+  /* The app screen, drawn at 412x600 and scaled to the glass */
+  .scr { position: absolute; left: 0; top: 0; width: 412px; height: 600px; transform-origin: 0 0; color: #111; font-family: 'PT Serif', serif; display: flex; flex-direction: column; }
+  .scr .bar { display: flex; justify-content: space-between; align-items: center; padding: 7px 12px; border-bottom: 2px solid #111; font: 700 16px Roboto; }
+  .scr .ib { width: 30px; height: 26px; border: 1.5px solid #111; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font: 700 13px Roboto; margin-left: 6px; }
+  .scr .st { font: 11px Roboto; padding: 4px 12px; border-bottom: 1px solid #111; color: #333; }
+  .scr .body { padding: 4px 12px; flex: 1; }
+  .scr .ld { font-weight: 700; font-size: 19px; line-height: 1.2; margin: 8px 0 4px; }
+  .scr .lx { font: 12px/1.35 Roboto; color: #333; }
+  .scr .sc { font: 700 11px Roboto; text-transform: uppercase; border-bottom: 1.5px solid #111; padding: 9px 0 2px; display: flex; justify-content: space-between; }
+  .scr .sc span { font-weight: 400; }
+  .scr .hl { font-size: 14px; line-height: 1.25; padding: 6px 0; border-bottom: 1px dotted #888; display: flex; gap: 8px; }
+  .scr .hl span { font: 10px Roboto; color: #444; white-space: nowrap; margin-left: auto; padding-top: 2px; }
+  .scr .read { color: #777; }
+  .scr .state { display: none; flex-direction: column; height: 100%; }
+  .scr .state.on { display: flex; }
+  .scr .state .body { flex: 1; }
+  .scr .bar .ft { flex: 1; font: 400 12px Roboto; margin-left: 8px; }
+  .scr .art { flex: 1; padding: 12px 16px; font: 13px/1.45 'PT Serif', serif; color: #000; overflow: hidden; }
+  .scr .art .ah { font: 700 17px/1.2 'PT Serif', serif; margin-bottom: 4px; }
+  .scr .art .am { font: 10px Roboto; color: #333; margin-bottom: 8px; }
+  .scr .art p { margin: 0 0 8px; }
+  .scr .art .pic { height: 90px; margin: 6px 0 8px; background: repeating-linear-gradient(45deg,#bbb,#bbb 3px,#ddd 3px,#ddd 6px); }
+  .scr .flash { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+  .scr .flash.go { animation: flash .35s steps(2, end); }
+  @keyframes flash { 0% { opacity: 1; } 50% { opacity: 1; background: #fff; } 100% { opacity: 0; } }
+  .scr .hl span.t, .scr .sc span.t { font: inherit; color: inherit; margin: 0; padding: 0; white-space: normal; text-transform: inherit; }
+  .scr .foot { display: flex; justify-content: space-between; font: 11px Roboto; padding: 6px 12px; }
+
+  .desc h1 { font: 900 clamp(34px, 3.4vw, 54px)/1.05 Roboto; margin: 0 0 18px; letter-spacing: -.5px; }
+  .desc .lead { font-size: 20px; margin: 0 0 26px; color: #222; }
+  .desc ul { list-style: none; padding: 0; margin: 0 0 30px; }
+  .desc li { padding: 10px 0; border-top: 2px solid #000; display: grid; grid-template-columns: 190px 1fr; gap: 14px; font-size: 16px; }
+  .desc li:last-child { border-bottom: 2px solid #000; }
+  .ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+  .cta { display: inline-block; padding: 12px 22px; border: 2.5px solid #000; border-radius: 10px; font-weight: 700; font-size: 17px; text-decoration: none; color: #000; }
+  .cta.solid { background: #000; color: var(--bg); }
+
+  footer { border-top: 2px solid #000; margin: 0 6vw; padding: 16px 0 22px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+  footer a { color: #000; }
+  footer .links { display: flex; gap: 18px; flex-wrap: wrap; }
+  .note { font: 14px/1.5 Roboto; color: #333; margin-top: 14px; max-width: 460px; }
+  .mock { position: fixed; left: 12px; bottom: 12px; background: #000; color: #fff; font: 700 11px Roboto; padding: 5px 9px; border-radius: 4px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 40px; } .desc { width: 100%; } .pb { height: auto; width: min(84vw, 440px); transform: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08), inset 0 2px 0 #fff, 0 30px 50px -24px rgba(0,0,0,.35); } .stage { padding-left: 0; } .desc li { grid-template-columns: 1fr; gap: 2px; } }
+</style>
+
+<div class="caps"></div>
+<header><a class="brand" href="./"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 295.94 192.00"><g fill="#000"><path d="M16.36 26.09V97.18H10.33V26.09ZM40.14 55.63V97.18H34.3V44.35H39.89ZM38.84 67.49 36.25 66.03Q36.52 61.36 38.13 57.26Q39.75 53.16 42.5 50.04Q45.26 46.91 49.01 45.14Q52.76 43.37 57.3 43.37Q61.25 43.37 64.38 44.45Q67.5 45.52 69.69 47.85Q71.88 50.18 73.02 53.86Q74.17 57.53 74.17 62.78V97.18H68.31V62.73Q68.31 57.29 66.78 54.19Q65.26 51.09 62.48 49.78Q59.69 48.47 55.88 48.47Q51.71 48.47 48.56 50.29Q45.41 52.11 43.29 55.02Q41.16 57.92 40.04 61.23Q38.92 64.54 38.84 67.49ZM95.14 22.18V97.18H89.28V22.18ZM128.27 44.35 103.59 68.86 93.07 79.04 92.21 73.28 100.66 64.15 120.87 44.35ZM123.19 97.18 101.15 69.74 104.35 64.68 130.22 97.18Z"/><path d="M86.93 112.09H114.91Q123.11 112.09 129.17 114.53Q135.22 116.97 138.52 121.75Q141.81 126.54 141.81 133.57Q141.81 139.67 139.91 143.78Q138.01 147.88 134.61 150.54Q131.22 153.2 126.73 154.91L121.11 158.08H97.62L97.53 144.85H114.91Q118.18 144.85 120.33 143.68Q122.48 142.51 123.58 140.33Q124.67 138.16 124.67 135.13Q124.67 132.06 123.55 129.86Q122.43 127.66 120.26 126.49Q118.08 125.32 114.91 125.32H104.07V183.18H86.93ZM125.85 183.18 110.12 151.73 128.29 151.64 144.21 182.45V183.18ZM186.79 164.28Q186.79 162.62 186.3 161.28Q185.81 159.94 184.49 158.77Q183.17 157.59 180.71 156.4Q178.24 155.2 174.24 153.88Q169.55 152.32 165.2 150.34Q160.86 148.37 157.44 145.7Q154.02 143.04 152.02 139.45Q150.02 135.87 150.02 131.08Q150.02 126.49 152.07 122.8Q154.12 119.12 157.81 116.5Q161.49 113.89 166.47 112.5Q171.45 111.11 177.36 111.11Q185.18 111.11 191.16 113.82Q197.14 116.53 200.53 121.49Q203.93 126.44 203.93 133.18H186.88Q186.88 130.49 185.79 128.44Q184.69 126.39 182.49 125.22Q180.29 124.05 176.97 124.05Q173.75 124.05 171.55 125.03Q169.35 126 168.23 127.64Q167.11 129.27 167.11 131.23Q167.11 132.84 168.01 134.13Q168.92 135.43 170.6 136.55Q172.28 137.67 174.7 138.7Q177.12 139.72 180.15 140.7Q185.81 142.51 190.23 144.73Q194.65 146.95 197.7 149.76Q200.75 152.56 202.34 156.13Q203.93 159.69 203.93 164.19Q203.93 168.97 202.07 172.68Q200.21 176.39 196.75 178.96Q193.28 181.52 188.45 182.84Q183.61 184.16 177.66 184.16Q172.19 184.16 166.89 182.76Q161.59 181.37 157.29 178.47Q153 175.56 150.43 171Q147.87 166.43 147.87 160.13H165.06Q165.06 163.26 165.89 165.41Q166.72 167.55 168.33 168.85Q169.94 170.14 172.28 170.7Q174.63 171.27 177.66 171.27Q180.93 171.27 182.93 170.31Q184.93 169.36 185.86 167.77Q186.79 166.19 186.79 164.28ZM247.38 164.28Q247.38 162.62 246.9 161.28Q246.41 159.94 245.09 158.77Q243.77 157.59 241.3 156.4Q238.84 155.2 234.84 153.88Q230.15 152.32 225.8 150.34Q221.46 148.37 218.04 145.7Q214.62 143.04 212.62 139.45Q210.62 135.87 210.62 131.08Q210.62 126.49 212.67 122.8Q214.72 119.12 218.4 116.5Q222.09 113.89 227.07 112.5Q232.05 111.11 237.96 111.11Q245.77 111.11 251.75 113.82Q257.74 116.53 261.13 121.49Q264.52 126.44 264.52 133.18H247.48Q247.48 130.49 246.38 128.44Q245.28 126.39 243.09 125.22Q240.89 124.05 237.57 124.05Q234.35 124.05 232.15 125.03Q229.95 126 228.83 127.64Q227.71 129.27 227.71 131.23Q227.71 132.84 228.61 134.13Q229.51 135.43 231.2 136.55Q232.88 137.67 235.3 138.7Q237.72 139.72 240.74 140.7Q246.41 142.51 250.83 144.73Q255.25 146.95 258.3 149.76Q261.35 152.56 262.94 156.13Q264.52 159.69 264.52 164.19Q264.52 168.97 262.67 172.68Q260.81 176.39 257.34 178.96Q253.88 181.52 249.04 182.84Q244.21 184.16 238.25 184.16Q232.78 184.16 227.49 182.76Q222.19 181.37 217.89 178.47Q213.59 175.56 211.03 171Q208.47 166.43 208.47 160.13H225.66Q225.66 163.26 226.49 165.41Q227.32 167.55 228.93 168.85Q230.54 170.14 232.88 170.7Q235.23 171.27 238.25 171.27Q241.52 171.27 243.53 170.31Q245.53 169.36 246.46 167.77Q247.38 166.19 247.38 164.28Z"/><path d="M1.35 144.08 A39.10 39.10 0 0 1 40.45 183.18" fill="none" stroke="#000" stroke-width="13.51"/><path d="M1.35 117.77 A65.41 65.41 0 0 1 66.76 183.18" fill="none" stroke="#000" stroke-width="13.51"/><circle cx="12.01" cy="172.52" r="10.66"/><rect x="0" y="0" width="245.94" height="4.50"/><rect x="291.44" y="50.00" width="4.50" height="128.00"/><path d="M245.94 0 V50.00 H295.94 Z"/></g></svg></a><span class="right"><span class="lang"><button data-l="ru">RU</button><button data-l="en">EN</button></span><a class="gh" href="https://github.com/0rb1ta/InkRSS">GitHub</a></span></header>
+
+<main>
+  <div class="stage">
+    <div class="pb">
+      <div class="glass" id="glass">
+        <div class="scr" id="scr">
+          <div class="state on"><div class="bar">InkRSS <span><span class="ib">✓✓</span><span class="ib">⟳</span><span class="ib">☰</span></span></div><div class="body"><div class="ld" data-ru="Как мы писали RSS-клиент для электронной книги" data-en="How we built an RSS reader for an e-ink device">Как мы писали RSS-клиент для электронной книги</div><div class="lx" data-ru="Хабр · 12 мин · Почему встроенное приложение не подошло и что пришлось сделать с картинками…" data-en="Tech Blog · 12 min · Why the built-in app was not enough, and what it took to fit pictures on e-ink…">Хабр · 12 мин · Почему встроенное приложение не подошло и что пришлось сделать с картинками…</div><div class="sc"><span class="t" data-ru="Новости" data-en="News">Новости</span> <span>31 ›</span></div><div class="hl"><span class="t" data-ru="Новый закон о связи вступит в силу в декабре" data-en="New telecom rules take effect in December">Новый закон о связи вступит в силу в декабре</span><span data-ru="Лента.ру · 2 мин" data-en="Daily News · 2 min">Лента.ру · 2 мин</span></div><div class="hl read"><span class="t" data-ru="Обзор PocketBook 970 через год" data-en="PocketBook 970: a year later">Обзор PocketBook 970 через год</span><span data-ru="Хабр · 7 мин" data-en="Tech Blog · 7 min">Хабр · 7 мин</span></div><div class="hl"><span class="t" data-ru="Вышел Qt 6.10 с новым движком текста" data-en="Qt 6.10 ships a new text engine">Вышел Qt 6.10 с новым движком текста</span><span data-ru="Хабр · 9 мин" data-en="Tech Blog · 9 min">Хабр · 9 мин</span></div><div class="hl"><span class="t" data-ru="Тарифы на мобильный интернет вырастут" data-en="Mobile data prices are going up">Тарифы на мобильный интернет вырастут</span><span data-ru="Лента.ру · 3 мин" data-en="Daily News · 3 min">Лента.ру · 3 мин</span></div><div class="sc"><span class="t" data-ru="Блоги" data-en="Blogs">Блоги</span> <span>26 ›</span></div><div class="hl"><span class="t" data-ru="Почему я ушёл с Pocket на Wallabag" data-en="Why I moved from Pocket to Wallabag">Почему я ушёл с Pocket на Wallabag</span><span data-ru="Блог · 6 мин" data-en="Blog · 6 min">Блог · 6 мин</span></div><div class="hl"><span class="t" data-ru="Итоги недели" data-en="The week in review">Итоги недели</span><span data-ru="Дайджест · 1 мин" data-en="Digest · 1 min">Дайджест · 1 мин</span></div><div class="hl"><span class="t" data-ru="Как устроен e-ink: от капсул до прошивки" data-en="How e-ink works: from capsules to firmware">Как устроен e-ink: от капсул до прошивки</span><span data-ru="Хабр · 14 мин" data-en="Tech Blog · 14 min">Хабр · 14 мин</span></div><div class="hl"><span class="t" data-ru="Читалки научились синхронизировать заметки" data-en="E-readers learn to sync notes">Читалки научились синхронизировать заметки</span><span data-ru="Хабр · 4 мин" data-en="Tech Blog · 4 min">Хабр · 4 мин</span></div><div class="hl"><span class="t" data-ru="Подборка RSS-лент о науке" data-en="A list of science feeds worth following">Подборка RSS-лент о науке</span><span data-ru="Блог · 3 мин" data-en="Blog · 3 min">Блог · 3 мин</span></div><div class="hl"><span class="t" data-ru="Зачем нужен свой Miniflux" data-en="Why run your own Miniflux">Зачем нужен свой Miniflux</span><span data-ru="Блог · 8 мин" data-en="Blog · 8 min">Блог · 8 мин</span></div></div><div class="foot"><span data-ru="08:12 · 57 новых" data-en="08:12 · 57 new">08:12 · 57 новых</span><span>— 1 / 9 —</span><span data-ru="≈ 1 ч 40 мин" data-en="≈ 1 h 40 min">≈ 1 ч 40 мин</span></div></div><div class="state"><div class="bar">InkRSS <span><span class="ib">✓✓</span><span class="ib">⟳</span><span class="ib">☰</span></span></div><div class="body"><div class="hl"><span class="t" data-ru="Ночной режим на e-ink: нужен ли он" data-en="Night mode on e-ink: do you need it">Ночной режим на e-ink: нужен ли он</span><span data-ru="Блог · 5 мин" data-en="Blog · 5 min">Блог · 5 мин</span></div><div class="hl"><span class="t" data-ru="Сравнили пять читалок 2026 года" data-en="Five e-readers of 2026 compared">Сравнили пять читалок 2026 года</span><span data-ru="Хабр · 11 мин" data-en="Tech Blog · 11 min">Хабр · 11 мин</span></div><div class="sc"><span class="t" data-ru="Наука" data-en="Science">Наука</span> <span>18 ›</span></div><div class="hl"><span class="t" data-ru="Каракатицы предпочли одну живую креветку четырём мёртвым" data-en="Cuttlefish pick one live shrimp over four dead ones">Каракатицы предпочли одну живую креветку четырём мёртвым</span><span data-ru="N + 1 · 2 мин" data-en="Science Daily · 2 min">N + 1 · 2 мин</span></div><div class="hl"><span class="t" data-ru="Перовскитные модули охладили ради эффективности" data-en="Cooling perovskite panels makes them more efficient">Перовскитные модули охладили ради эффективности</span><span data-ru="N + 1 · 3 мин" data-en="Science Daily · 3 min">N + 1 · 3 мин</span></div><div class="hl"><span class="t" data-ru="Павианы запомнили, где сгорели фрукты" data-en="Baboons remember where the fruit burned">Павианы запомнили, где сгорели фрукты</span><span data-ru="N + 1 · 1 мин" data-en="Science Daily · 1 min">N + 1 · 1 мин</span></div><div class="hl"><span class="t" data-ru="Летучие мыши «говорят» в темноте" data-en="How bats talk in the dark">Летучие мыши «говорят» в темноте</span><span data-ru="N + 1 · 2 мин" data-en="Science Daily · 2 min">N + 1 · 2 мин</span></div><div class="hl"><span class="t" data-ru="Кальций в сосудах и риск для сердца" data-en="Calcium in arteries and heart risk">Кальций в сосудах и риск для сердца</span><span data-ru="N + 1 · 2 мин" data-en="Science Daily · 2 min">N + 1 · 2 мин</span></div></div><div class="foot"><span data-ru="08:12 · 57 новых" data-en="08:12 · 57 new">08:12 · 57 новых</span><span>— 2 / 9 —</span><span data-ru="≈ 1 ч 40 мин" data-en="≈ 1 h 40 min">≈ 1 ч 40 мин</span></div></div><div class="state"><div class="bar"><span class="ib">←</span><span class="ft">N + 1</span><span><span class="ib">☰</span></span></div><div class="art"><div class="ah" data-ru="Каракатицы предпочли одну живую креветку четырём мёртвым" data-en="Cuttlefish pick one live shrimp over four dead ones">Каракатицы предпочли одну живую креветку четырём мёртвым</div><div class="am" data-ru="N + 1 · 30 октября, 16:20 · 2 мин" data-en="Science Daily · October 30, 16:20 · 2 min">N + 1 · 30 октября, 16:20 · 2 мин</div><p><span data-ru="Тайваньские учёные обнаружили, что присутствие мёртвых креветок в наборе отталкивает каракатиц. Выбирая между одной живой и одной живой с мёртвыми, животные выбирали одну живую." data-en="Researchers in Taiwan found that dead shrimp put cuttlefish off a meal. Offered one live shrimp alone or one live shrimp with dead ones, the animals chose the single live one.">Тайваньские учёные обнаружили, что присутствие мёртвых креветок в наборе отталкивает каракатиц. Выбирая между одной живой и одной живой с мёртвыми, животные выбирали одну живую.</span></p><div class="pic"></div><p><span data-ru="Чем больше мёртвых ракообразных было в наборе, тем реже его выбирали." data-en="The more dead shrimp in the set, the less often it was chosen.">Чем больше мёртвых ракообразных было в наборе, тем реже его выбирали.</span></p></div><div class="foot" style="justify-content:center"><span>1 / 3</span></div></div><div class="flash"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="desc">
+    <h1 data-ru="RSS-ленты на PocketBook. Целиком." data-en="Your RSS feeds on PocketBook. In full.">RSS-ленты на PocketBook. Целиком.</h1>
+    <p class="lead" data-ru="Каждое утро — свежий выпуск: главная статья, разделы по папкам, время чтения. Листается кнопками, как книга." data-en="A fresh issue every morning: a lead story, sections by folder, reading time. Turn pages with the buttons, like a book.">Каждое утро — свежий выпуск: главная статья, разделы по папкам, время чтения. Листается кнопками, как книга.</p>
+    <ul>
+      <li><b data-ru="Полный текст" data-en="Full text">Полный текст</b><span data-ru="статьи целиком, с картинками — через ваш Miniflux" data-en="whole articles with images — via your Miniflux">статьи целиком, с картинками — через ваш Miniflux</span></li>
+      <li><b data-ru="Без интернета" data-en="Offline">Без интернета</b><span data-ru="всё скачивается по кнопке «Обновить»" data-en="everything downloads when you tap Refresh">всё скачивается по кнопке «Обновить»</span></li>
+      <li><b data-ru="Синхронизация" data-en="Sync">Синхронизация</b><span data-ru="прочитанное отмечается и на телефоне" data-en="read on the reader, read on your phone">прочитанное отмечается и на телефоне</span></li>
+      <li><b data-ru="Без сервера тоже" data-en="No server? Fine">Без сервера тоже</b><span data-ru="ленты напрямую и OPML, но без полного текста" data-en="feeds directly and OPML, without full text">ленты напрямую и OPML, но без полного текста</span></li>
+    </ul>
+    <div class="ctas"><a class="cta solid" href="https://github.com/0rb1ta/InkRSS/releases/latest" data-ru="Скачать 0.1.0" data-en="Download 0.1.0">Скачать 0.1.0</a><a class="cta" href="https://github.com/0rb1ta/InkRSS#install" data-ru="Как установить" data-en="How to install">Как установить</a></div>
+    <p class="note" data-ru="Из серверов пока поддерживается только Miniflux (свой или на хостинге). Другие — в планах." data-en="For now Miniflux is the only supported server (self-hosted or hosted). Others are planned.">Из серверов пока поддерживается только Miniflux (свой или на хостинге). Другие — в планах.</p>
+  </div>
+</main>
+
+<footer>
+  <span data-ru="InkRSS 0.1.0 · GPL v3" data-en="InkRSS 0.1.0 · GPL v3">InkRSS 0.1.0 · GPL v3</span>
+  <span class="links"><a href="https://github.com/0rb1ta/InkRSS#install" data-ru="Установка" data-en="Install">Установка</a><a href="https://miniflux.app" data-ru="Miniflux" data-en="Miniflux">Miniflux</a><a href="https://github.com/0rb1ta/InkRSS/issues" data-ru="Сообщить об ошибке" data-en="Report a bug">Сообщить об ошибке</a><a href="https://0rb1ta.github.io/InkToday/">InkToday</a></span>
+</footer>
+<script>
+// Russian or English: from the browser language, switchable, remembered.
+function setLang(l) {
+  document.documentElement.lang = l;
+  document.querySelectorAll('[data-ru]').forEach(e => e.textContent = e.dataset[l]);
+  document.querySelectorAll('.lang button').forEach(b => b.classList.toggle('on', b.dataset.l === l));
+  try { localStorage.setItem('lang', l); } catch (e) {}
+}
+document.querySelectorAll('.lang button').forEach(b => b.onclick = () => setLang(b.dataset.l));
+let saved = null; try { saved = localStorage.getItem('lang'); } catch (e) {}
+setLang(saved || (navigator.language.startsWith('ru') ? 'ru' : 'en'));
+</script>
+
+<script>
+// scale the 412x600 app screen to the device glass
+function fit() { const g = document.getElementById('glass'), s = document.getElementById('scr');
+  s.style.transform = `scale(${g.clientWidth / 412}, ${g.clientHeight / 600})`; }
+addEventListener('resize', fit); fit();
+</script>
+<script>
+// The reader on the page turns its own pages: issue page 1, page 2, an article, again; each turn
+// flashes like an e-ink refresh. Still for those who asked for less motion.
+(() => {
+  const states = document.querySelectorAll('.scr .state');
+  const flash = document.querySelector('.scr .flash');
+  if (!states.length || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  let i = 0;
+  setInterval(() => {
+    flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
+    setTimeout(() => {
+      states[i].classList.remove('on');
+      i = (i + 1) % states.length;
+      states[i].classList.add('on');
+    }, 120);
+  }, 4000);
+})();
+</script>
