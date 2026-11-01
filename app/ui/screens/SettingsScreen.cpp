@@ -185,7 +185,7 @@ void SettingsScreen::rebuild()
         rebuild();
     });
     auto *debugHint = new QLabel(
-        tx("Для разбора ошибок: каждый открытый экран сохраняется картинкой в system/inkrss/shots/, журнал system/inkrss/log.txt пишется подробнее. Обычно не нужна."),
+        tx("Для разбора ошибок: последние 50 экранов сохраняются картинками в system/inkrss/shots/, журнал system/inkrss/log.txt пишется подробнее. Обычно не нужна."),
         m_body);
     debugHint->setFont(Theme::smallFont());
     debugHint->setProperty("role", "muted");

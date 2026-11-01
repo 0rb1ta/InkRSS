@@ -205,23 +205,24 @@ void MinifluxApi::unread(int limit, std::function<void(ApiFail, QList<Entry>, in
         });
 }
 
-void MinifluxApi::starred(int limit, std::function<void(ApiFail, QList<Entry>)> done)
+void MinifluxApi::starred(int limit, int offset, std::function<void(ApiFail, QList<Entry>, int)> done)
 {
     get(QStringLiteral("entries"),
         {{QStringLiteral("starred"), QStringLiteral("true")},
          {QStringLiteral("limit"), QString::number(limit)},
+         {QStringLiteral("offset"), QString::number(offset)},
          {QStringLiteral("order"), QStringLiteral("published_at")},
          {QStringLiteral("direction"), QStringLiteral("desc")}},
         [done](ApiFail f, const QByteArray &body) {
             QList<Entry> out;
             if (f != ApiFail::None)
-                return done(f, out);
+                return done(f, out, 0);
             const QJsonDocument doc = QJsonDocument::fromJson(body);
             if (!doc.isObject())
-                return done(ApiFail::NotMiniflux, out);
+                return done(ApiFail::NotMiniflux, out, 0);
             for (const QJsonValue &v : doc.object().value("entries").toArray())
                 out << parseEntry(v.toObject());
-            done(ApiFail::None, out);
+            done(ApiFail::None, out, doc.object().value("total").toInt());
         });
 }
 

@@ -148,6 +148,7 @@ ParsedFeed parseFeed(const QByteArray &xml)
         cur.published = parseFeedDate(date.isEmpty() ? updated : date);
         if (key.isEmpty())
             key = !cur.url.isEmpty() ? cur.url : cur.title + date;
+        cur.sourceKey = key;
         cur.id = entryId(key);
         out.entries << cur;
     };

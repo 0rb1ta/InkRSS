@@ -264,6 +264,11 @@ QLabel *label(const QString &text, const QFont &font, QWidget *parent)
 bool Ui::showQr(QWidget *parent, const QString &title, const QString &subtitle, const QString &url,
                 const QString &hint, const QString &actionText)
 {
+    const QImage qrImage = makeQrImage(url, qMax(3, Theme::mm(1.0)));
+    if (qrImage.isNull()) {
+        toast(parent, tx("Ссылка слишком длинная для QR-кода"));
+        return false;
+    }
     QDialog *d = frameDialog(parent);
     auto *v = new QVBoxLayout(d);
     v->setContentsMargins(Theme::mm(4), Theme::mm(4), Theme::mm(4), Theme::mm(4));
@@ -272,7 +277,7 @@ bool Ui::showQr(QWidget *parent, const QString &title, const QString &subtitle, 
         v->addWidget(label(subtitle, Theme::bodyFont(), d));
     auto *qr = new QLabel(d);
     qr->setAlignment(Qt::AlignCenter);
-    qr->setPixmap(QPixmap::fromImage(makeQrImage(url, qMax(3, Theme::mm(1.0)))));
+    qr->setPixmap(QPixmap::fromImage(qrImage));
     v->addWidget(qr);
     QString shortUrl = url;
     shortUrl.remove(QStringLiteral("https://"));

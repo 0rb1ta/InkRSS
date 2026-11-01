@@ -15,6 +15,7 @@
 #include <QLocale>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QTextDocument>
 
 namespace {
@@ -71,20 +72,18 @@ void ArticleScreen::layoutDocument()
     const QFont font = Theme::articleFont(c.fontFamily, pt * 0.3528 * 1.25);
     m_doc->setDefaultFont(font);
     m_doc->setDocumentMargin(0);
-    m_doc->setDefaultStyleSheet(QStringLiteral("body, p, h1, h2, h3, li { color: #000; } h1 { font-size: 140%; }"
-                                               " p { margin-bottom: 0.6em; } .meta { color: #333; font-size: 75%; }"
-                                               " a { color: #000; text-decoration: underline; }"));
+    m_doc->setDefaultStyleSheet(articleStyleSheet());
     QString body;
     QFile f(articlePath(m_app->articlesDir(), m_entry.id));
     if (f.open(QIODevice::ReadOnly))
         body = QString::fromUtf8(f.readAll());
     else
         body = cleanHtml(m_entry.html, QUrl(m_entry.url)).html; // not prepared yet: text without images
+    body = blockLayout(body);
     if (!c.images) {
         body = withoutImages(body);
     } else {
-        // At most 40% of a page per picture: less text is pushed to the next page with it.
-        body = fitImages(body, pageRect().width(), pageRect().height() * 40 / 100, [](const QString &src) {
+        body = fitImages(body, pageRect().width(), articleImageMaxHeight(pageRect().height()), [](const QString &src) {
             return QImageReader(QUrl(src).toLocalFile()).size();
         });
     }
@@ -167,14 +166,15 @@ void ArticleScreen::showMenu()
     font.fontChanged = [apply](const QString &family) { apply([family](Config &n) { n.fontFamily = family; }); };
     font.sizes = {{tx("Текст"), c.fontPt > 0 ? c.fontPt : Theme::kDefaultArticlePt, 8, 18,
                    [apply](int pt) { apply([pt](Config &n) { n.fontPt = pt; }); }}};
-    const int choice = Ui::cornerMenu(
-        m_menu,
-        {{now.starred ? QStringLiteral("star") : QStringLiteral("regular:star"),
-          now.starred ? tx("Убрать из избранного") : tx("В избранное")},
-         {QStringLiteral("regular:envelope"), tx("Оставить непрочитанной")},
-         {QStringLiteral("font"), tx("Шрифт и размер")},
-         {QStringLiteral("qrcode"), tx("QR-код ссылки")}},
-        &font, 2);
+    QList<Ui::MenuItem> actions{
+        {now.starred ? QStringLiteral("star") : QStringLiteral("regular:star"),
+         now.starred ? tx("Убрать из избранного") : tx("В избранное")},
+        {QStringLiteral("regular:envelope"), tx("Оставить непрочитанной")},
+        {QStringLiteral("font"), tx("Шрифт и размер")},
+        {QStringLiteral("qrcode"), tx("QR-код ссылки")}};
+    if (m_app->fullText())
+        actions << Ui::MenuItem{QStringLiteral("download"), tx("Скачать полный текст")};
+    const int choice = Ui::cornerMenu(m_menu, actions, &font, 2);
     switch (choice) {
     case 0:
         m_app->store().setStarred(m_entry.id, !now.starred);
@@ -188,6 +188,23 @@ void ArticleScreen::showMenu()
         if (!m_entry.url.isEmpty())
             Ui::showQr(this, m_entry.title, QString(), m_entry.url, tx("Наведите камеру телефона"));
         break;
+    case 4: {
+        QPointer<ArticleScreen> self(this);
+        Ui::toast(this, tx("Загружаем полный текст…"));
+        m_app->fetchFullText(m_entry.id, [self](QString error) {
+            if (!self)
+                return;
+            if (!error.isEmpty()) {
+                Ui::toast(self, error);
+                return;
+            }
+            self->m_entry = self->m_app->store().entry(self->m_entry.id);
+            self->layoutDocument();
+            self->update();
+            Ui::toast(self, tx("Полный текст загружен"));
+        });
+        break;
+    }
     default:
         break;
     }

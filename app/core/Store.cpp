@@ -115,7 +115,8 @@ bool Store::open(const QString &path)
                     " kind TEXT, feed_id INTEGER, category_id INTEGER, at INTEGER)")
         && exec(db, "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         && exec(db, "CREATE TABLE IF NOT EXISTS gone (id INTEGER PRIMARY KEY)")
-        && exec(db, "CREATE TABLE IF NOT EXISTS nofulltext (id INTEGER PRIMARY KEY)");
+        && exec(db, "CREATE TABLE IF NOT EXISTS nofulltext (id INTEGER PRIMARY KEY)")
+        && exec(db, "CREATE TABLE IF NOT EXISTS fulltextfails (id INTEGER PRIMARY KEY, attempts INTEGER)");
 }
 
 void Store::replaceCategories(const QList<Category> &categories)
@@ -149,7 +150,7 @@ qint64 Store::addCategory(const QString &title)
     return q.lastInsertId().toLongLong();
 }
 
-void Store::replaceFeeds(const QList<Feed> &feeds)
+QList<qint64> Store::replaceFeeds(const QList<Feed> &feeds)
 {
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     db.transaction();
@@ -169,9 +170,23 @@ void Store::replaceFeeds(const QList<Feed> &feeds)
         q.addBindValue(f.error);
         exec(q);
     }
+    QList<qint64> removed;
+    QSqlQuery old(db);
+    old.prepare("SELECT id FROM entries WHERE feed_id NOT IN (SELECT id FROM keep)");
+    exec(old);
+    while (old.next())
+        removed << old.value(0).toLongLong();
+    old.finish();
+    QSqlQuery gone(db);
+    gone.prepare("INSERT OR IGNORE INTO gone (id) VALUES (?)");
+    for (qint64 id : removed) {
+        gone.addBindValue(id);
+        exec(gone);
+    }
     exec(db, "DELETE FROM entries WHERE feed_id NOT IN (SELECT id FROM keep)");
     exec(db, "DELETE FROM feeds WHERE id NOT IN (SELECT id FROM keep)");
     db.commit();
+    return removed;
 }
 
 qint64 Store::addFeed(const Feed &feed)
@@ -413,6 +428,33 @@ bool Store::noFullText(qint64 id) const
     return q.next();
 }
 
+void Store::noteFullTextFailure(qint64 id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare("INSERT OR REPLACE INTO fulltextfails (id, attempts)"
+              " VALUES (?, COALESCE((SELECT attempts FROM fulltextfails WHERE id = ?), 0) + 1)");
+    q.addBindValue(id);
+    q.addBindValue(id);
+    exec(q);
+}
+
+void Store::clearFullTextFailures(qint64 id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare("DELETE FROM fulltextfails WHERE id = ?");
+    q.addBindValue(id);
+    exec(q);
+}
+
+int Store::fullTextFailures(qint64 id) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare("SELECT attempts FROM fulltextfails WHERE id = ?");
+    q.addBindValue(id);
+    exec(q);
+    return q.next() ? q.value(0).toInt() : 0;
+}
+
 Entry Store::entry(qint64 id) const
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
@@ -486,10 +528,43 @@ void Store::setReadFromSource(const QList<qint64> &ids)
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     db.transaction();
     QSqlQuery q(db);
-    q.prepare("UPDATE entries SET read = 1 WHERE id = ?");
+    q.prepare("UPDATE entries SET read = 1 WHERE id = ? AND NOT EXISTS ("
+              " SELECT 1 FROM changes c WHERE (c.entry_id = entries.id AND c.kind IN ('read', 'unread'))"
+              " OR (c.kind = 'allread' AND (c.feed_id = entries.feed_id"
+              " OR c.category_id = (SELECT category_id FROM feeds WHERE feeds.id = entries.feed_id))))");
     for (qint64 id : ids) {
         q.addBindValue(id);
         exec(q);
+    }
+    db.commit();
+}
+
+void Store::setStarredFromSource(const QSet<qint64> &ids)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery local(db);
+    local.prepare("SELECT id FROM entries WHERE starred = 1");
+    exec(local);
+    QList<qint64> starred;
+    while (local.next())
+        starred << local.value(0).toLongLong();
+    local.finish();
+    QSqlQuery pending(db);
+    pending.prepare("SELECT 1 FROM changes WHERE entry_id = ? AND kind IN ('star', 'unstar')");
+    QSqlQuery unstar(db);
+    unstar.prepare("UPDATE entries SET starred = 0 WHERE id = ?");
+    for (qint64 id : starred) {
+        if (ids.contains(id))
+            continue;
+        pending.addBindValue(id);
+        exec(pending);
+        const bool keep = pending.next();
+        pending.finish();
+        if (!keep) {
+            unstar.addBindValue(id);
+            exec(unstar);
+        }
     }
     db.commit();
 }
@@ -529,16 +604,17 @@ QList<StatusChange> Store::pendingChanges() const
 {
     QList<StatusChange> out;
     QSqlQuery q(QSqlDatabase::database(m_conn));
-    q.prepare("SELECT entry_id, kind, feed_id, category_id, at FROM changes ORDER BY seq");
+    q.prepare("SELECT seq, entry_id, kind, feed_id, category_id, at FROM changes ORDER BY seq");
     exec(q);
     while (q.next()) {
         StatusChange c;
-        if (!kindFromName(q.value(1).toString(), &c.kind))
+        if (!kindFromName(q.value(2).toString(), &c.kind))
             continue;
-        c.entryId = q.value(0).toLongLong();
-        c.feedId = q.value(2).toLongLong();
-        c.categoryId = q.value(3).toLongLong();
-        c.at = fromSecs(q.value(4).toLongLong());
+        c.seq = q.value(0).toLongLong();
+        c.entryId = q.value(1).toLongLong();
+        c.feedId = q.value(3).toLongLong();
+        c.categoryId = q.value(4).toLongLong();
+        c.at = fromSecs(q.value(5).toLongLong());
         out << c;
     }
     return out;
@@ -549,14 +625,9 @@ void Store::clearChanges(const QList<StatusChange> &sent)
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     db.transaction();
     QSqlQuery q(db);
-    // `at` is part of the match: a change made while the old one was being sent stays queued.
-    q.prepare("DELETE FROM changes WHERE entry_id = ? AND kind = ? AND feed_id = ? AND category_id = ? AND at = ?");
+    q.prepare("DELETE FROM changes WHERE seq = ?");
     for (const StatusChange &c : sent) {
-        q.addBindValue(c.entryId);
-        q.addBindValue(kindName(c.kind));
-        q.addBindValue(c.feedId);
-        q.addBindValue(c.categoryId);
-        q.addBindValue(secs(c.at));
+        q.addBindValue(c.seq);
         exec(q);
     }
     db.commit();

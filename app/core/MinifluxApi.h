@@ -31,8 +31,8 @@ public:
     void feeds(std::function<void(ApiFail, QList<Feed>)> done);
     // Newest unread articles; `total` is how many unread the server has in all.
     void unread(int limit, std::function<void(ApiFail, QList<Entry>, int total)> done);
-    // Starred articles, read or not, newest first.
-    void starred(int limit, std::function<void(ApiFail, QList<Entry>)> done);
+    // One page of starred articles, read or not, newest first.
+    void starred(int limit, int offset, std::function<void(ApiFail, QList<Entry>, int total)> done);
     // Asks the server to download the original page and extract the article.
     void fetchContent(qint64 id, std::function<void(ApiFail, QString html)> done);
     void setStatus(const QList<qint64> &ids, bool read, std::function<void(ApiFail)> done);

@@ -1,5 +1,6 @@
 #include "MinifluxSource.h"
 
+#include "I18n.h"
 #include "Log.h"
 #include "Store.h"
 
@@ -25,6 +26,9 @@ struct SyncRun {
     QList<QList<StatusChange>> sendChanges;
     QList<Entry> entries;
     QList<qint64> toPrepare;
+    QSet<qint64> starredIds;
+    bool starredComplete = false;
+    bool prepareFailed = false;
     int total = 0;
     int fullTextAsked = 0;
     int fullTextOk = 0;
@@ -61,12 +65,21 @@ void prepareChanged(const Run &r)
 {
     // Only new or changed articles are prepared again (cleaned, images fetched, written).
     r->toPrepare.clear();
+    QSet<qint64> scheduled;
     for (const Entry &e : r->entries) {
         const Entry stored = r->store->entry(e.id);
-        if (stored.id == 0 || stored.html != e.html || (r->ready && !r->ready(e.id)))
+        if (stored.id == 0 || stored.html != e.html || (r->ready && !r->ready(e.id))) {
             r->toPrepare << e.id;
+            scheduled.insert(e.id);
+        }
     }
+    if (r->ready)
+        for (qint64 id : r->store->allIds())
+            if (!scheduled.contains(id) && !r->ready(id))
+                r->toPrepare << id;
     r->store->upsertEntries(r->entries);
+    if (r->starredComplete)
+        r->store->setStarredFromSource(r->starredIds);
     r->step = QStringLiteral("prepare");
     lap(*r);
     if (r->progress)
@@ -74,24 +87,37 @@ void prepareChanged(const Run &r)
     return prepareFrom(r, 0);
 }
 
+void fetchFrom(const Run &r, int i);
+
 // Starred on the phone but already read: not among the unread, still wanted under "Starred".
-// A failure here only leaves that list as it was.
-void fetchStarred(const Run &r)
+void fetchStarredFrom(const Run &r, int offset)
 {
-    r->api->starred(MinifluxSource::kStarredLimit, [r](ApiFail fail, QList<Entry> starred) {
-        if (fail == ApiFail::None) {
-            QSet<qint64> have;
-            for (const Entry &e : r->entries)
-                have.insert(e.id);
-            for (const Entry &e : starred)
-                if (!have.contains(e.id))
-                    r->entries << e;
+    r->api->starred(MinifluxSource::kStarredLimit, offset, [r, offset](ApiFail fail, QList<Entry> starred, int total) {
+        if (fail != ApiFail::None) {
+            Log::write(QStringLiteral("miniflux: starred list unavailable, keeping local stars"));
+            return fetchFrom(r, 0);
         }
-        prepareChanged(r);
+        QSet<qint64> have;
+        for (const Entry &e : r->entries)
+            have.insert(e.id);
+        for (const Entry &e : starred) {
+            r->starredIds.insert(e.id);
+            if (!have.contains(e.id))
+                r->entries << e;
+        }
+        const int next = offset + starred.size();
+        if (starred.isEmpty() || next >= total) {
+            r->starredComplete = true;
+            return fetchFrom(r, 0);
+        }
+        fetchStarredFrom(r, next);
     });
 }
 
-void fetchFrom(const Run &r, int i);
+void fetchStarred(const Run &r)
+{
+    fetchStarredFrom(r, 0);
+}
 
 void complete(const Run &r)
 {
@@ -113,6 +139,11 @@ void complete(const Run &r)
     if (r->removed && !removed.isEmpty())
         r->removed(removed);
     Log::write(QStringLiteral("sync: cleanup articles=%1").arg(removed.size()));
+    if (r->prepareFailed) {
+        Log::write(QStringLiteral("sync: failed at prepare: cannot save one or more articles"));
+        r->done(tx("Не удалось сохранить статьи на читалку"));
+        return;
+    }
     finish(r, ApiFail::None);
 }
 
@@ -120,13 +151,14 @@ void prepareFrom(const Run &r, int i)
 {
     if (i >= r->toPrepare.size())
         return complete(r);
-    auto next = [r, i] {
+    auto next = [r, i](bool saved) {
+        r->prepareFailed |= !saved;
         if (r->progress)
             r->progress(i + 1, r->toPrepare.size());
         prepareFrom(r, i + 1);
     };
     if (!r->prepare)
-        return next();
+        return next(true);
     r->prepare(r->store->entry(r->toPrepare[i]), next);
 }
 
@@ -142,7 +174,8 @@ bool needsFullText(const Run &r, Entry &e)
         e.readingMinutes = stored.readingMinutes;
         return false;
     }
-    if (r->fullTextAsked >= MinifluxSource::kMaxFullTextFetches || r->store->noFullText(e.id)) {
+    if (r->fullTextAsked >= MinifluxSource::kMaxFullTextFetches || r->store->noFullText(e.id)
+        || r->store->fullTextFailures(e.id) >= MinifluxSource::kMaxFullTextAttempts) {
         ++r->fullTextSkipped;
         return false;
     }
@@ -157,8 +190,7 @@ void fetchFrom(const Run &r, int i)
         Log::write(QStringLiteral("sync: fulltext asked=%1 ok=%2 failed=%3 skipped=%4 (%5 ms)")
                        .arg(r->fullTextAsked).arg(r->fullTextOk).arg(r->fullTextFailed).arg(r->fullTextSkipped)
                        .arg(lap(*r)));
-        r->step = QStringLiteral("starred");
-        return fetchStarred(r);
+        return prepareChanged(r);
     }
     ++r->fullTextAsked;
     r->api->fetchContent(r->entries[i].id, [r, i](ApiFail fail, QString html) {
@@ -166,11 +198,15 @@ void fetchFrom(const Run &r, int i)
         if (fail == ApiFail::None && textLength(html) > textLength(r->entries[i].html)) {
             r->entries[i].html = html;
             r->entries[i].readingMinutes = readingMinutes(html);
+            r->store->clearFullTextFailures(r->entries[i].id);
             ++r->fullTextOk;
-        } else if (fail != ApiFail::None) {
+        } else {
             ++r->fullTextFailed;
             Log::write(QStringLiteral("miniflux: no full text for %1").arg(r->entries[i].id));
-            r->store->setNoFullText(r->entries[i].id);
+            if (fail == ApiFail::Server)
+                r->store->noteFullTextFailure(r->entries[i].id);
+            if (fail == ApiFail::None)
+                r->store->setNoFullText(r->entries[i].id);
         }
         fetchFrom(r, i + 1);
     });
@@ -187,7 +223,9 @@ void download(const Run &r)
             if (fail != ApiFail::None)
                 return finish(r, fail);
             r->store->replaceCategories(cats);
-            r->store->replaceFeeds(feeds);
+            const QList<qint64> removed = r->store->replaceFeeds(feeds);
+            if (r->removed && !removed.isEmpty())
+                r->removed(removed);
             Log::write(QStringLiteral("sync: categories=%1 feeds=%2 (%3 ms)").arg(cats.size()).arg(feeds.size()).arg(lap(*r)));
             r->step = QStringLiteral("entries");
             r->api->unread(r->limit, [r](ApiFail fail, QList<Entry> entries, int total) {
@@ -197,8 +235,8 @@ void download(const Run &r)
                 r->total = total;
                 Log::write(QStringLiteral("sync: entries got=%1 total=%2 limit=%3 (%4 ms)")
                                .arg(entries.size()).arg(total).arg(r->limit).arg(lap(*r)));
-                r->step = QStringLiteral("fulltext");
-                fetchFrom(r, 0);
+                r->step = QStringLiteral("starred");
+                fetchStarred(r);
             });
         });
     });

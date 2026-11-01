@@ -20,5 +20,7 @@ private:
     qint64 m_pressedAt = 0;
 };
 
-// "20261031-140512.png": file name of a screenshot taken at `t`.
+// "20261031-140512000.png": file name of a screenshot taken at `t`, with milliseconds.
 QString shotFileName(const QDateTime &t);
+// Keeps only the newest `keep` screenshots and returns how many were removed.
+int pruneShots(const QString &dirPath, int keep);

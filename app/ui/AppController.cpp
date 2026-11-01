@@ -76,11 +76,16 @@ void AppController::start()
 {
     m_config = loadConfig(m_configPath);
     applyLanguage(false);
+    if (m_config.mode == Config::Miniflux && m_config.profile.isEmpty() && !m_config.auth.user.isEmpty())
+        migrateLegacyAccount(minifluxAccountKey(m_config.auth, m_config.auth.user));
     if (m_config.mode == Config::None) {
         m_nav->setRoot(new ConnectScreen(this));
         return;
     }
-    buildSource();
+    if (!buildSource()) {
+        m_nav->setRoot(new ConnectScreen(this));
+        return;
+    }
     showIssue(false);
 }
 
@@ -92,7 +97,7 @@ QString AppController::storageRoot() const
 void AppController::removeFeed(qint64 feedId)
 {
     removeArticleFiles(articlesDir(), m_store->removeFeed(feedId));
-    removeUnusedImages(articlesDir(), imagesDir());
+    removeUnusedImages(Paths::allArticlesDirs(Paths::dataDir()), imagesDir());
 }
 
 QString AppController::imagesDir() const
@@ -102,7 +107,7 @@ QString AppController::imagesDir() const
 
 QString AppController::articlesDir() const
 {
-    return Paths::dataDir() + QStringLiteral("/articles");
+    return m_articlesDir.isEmpty() ? Paths::articlesDir(Paths::dataDir()) : m_articlesDir;
 }
 
 bool AppController::fullText() const
@@ -110,12 +115,17 @@ bool AppController::fullText() const
     return m_source && m_source->fullText();
 }
 
-void AppController::updateConfig(const Config &config)
+bool AppController::updateConfig(const Config &config)
 {
+    if (!saveConfig(m_configPath, config)) {
+        Log::write(QStringLiteral("settings: cannot save config"));
+        Ui::toast(this, tx("Не удалось сохранить настройки"));
+        return false;
+    }
     m_config = config;
-    saveConfig(m_configPath, m_config);
     if (m_miniflux)
         m_miniflux->setLimit(m_config.limit); // read at the start of each sync
+    return true;
 }
 
 bool AppController::busy()
@@ -127,7 +137,27 @@ bool AppController::busy()
     return true;
 }
 
-void AppController::buildSource()
+void AppController::migrateLegacyAccount(const QString &profile)
+{
+    const QString data = Paths::dataDir();
+    if (!Paths::migrateMinifluxAccount(data, profile)) {
+        Log::write(QStringLiteral("account: cannot migrate legacy data, keeping legacy paths"));
+        return;
+    }
+    Config next = m_config;
+    next.profile = profile;
+    if (saveConfig(m_configPath, next)) {
+        m_config = next;
+        if (Paths::cleanupLegacyMinifluxAccount(data, profile))
+            removeUnusedImages(Paths::allArticlesDirs(data), imagesDir());
+        else
+            Log::write(QStringLiteral("account: migrated, but legacy data was left in place"));
+    } else {
+        Log::write(QStringLiteral("account: cannot save the migrated profile, keeping legacy paths"));
+    }
+}
+
+bool AppController::buildSource()
 {
     m_source.reset();
     m_miniflux = nullptr;
@@ -135,19 +165,26 @@ void AppController::buildSource()
     m_store.reset(new Store);
     const QString data = Paths::dataDir();
     const bool miniflux = m_config.mode == Config::Miniflux;
-    m_store->open(data + (miniflux ? QStringLiteral("/feeds-miniflux.db") : QStringLiteral("/feeds-direct.db")));
+    const QString database = miniflux ? Paths::minifluxDatabase(data, m_config.profile)
+                                      : data + QStringLiteral("/feeds-direct.db");
+    m_articlesDir = miniflux ? Paths::articlesDir(data, m_config.profile) : Paths::articlesDir(data);
+    QDir().mkpath(QFileInfo(database).absolutePath());
+    if (!m_store->open(database)) {
+        Ui::toast(this, tx("Не удалось открыть локальную базу данных"));
+        return false;
+    }
     // Images no wider than the text column, so the article view never has to scale them.
     const QSize screen = QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->size() : QSize(1200, 1600);
     m_images.reset(new ImageCache(*m_net, imagesDir(), screen.width() - 2 * Theme::mm(6)));
     // The images setting can change at any time; it is read for each article.
     const PrepareFn withImages = makePrepare(*m_images, articlesDir(), true);
     const PrepareFn textOnly = makePrepare(*m_images, articlesDir(), false);
-    PrepareFn prepare = [this, withImages, textOnly](const Entry &e, std::function<void()> done) {
+    PrepareFn prepare = [this, withImages, textOnly](const Entry &e, std::function<void(bool)> done) {
         (m_config.images ? withImages : textOnly)(e, std::move(done));
     };
     const QString dir = articlesDir();
     RemovedFn removed = [dir](const QList<qint64> &ids) { removeArticleFiles(dir, ids); };
-    ReadyFn ready = [dir](qint64 id) { return QFile::exists(articlePath(dir, id)); };
+    ReadyFn ready = [dir](qint64 id) { return articleReady(dir, id); };
     if (miniflux) {
         m_api.reset(new MinifluxApi(*m_net, m_config.auth));
         m_miniflux = new MinifluxSource(*m_api, m_config.limit, prepare, removed, ready);
@@ -155,6 +192,7 @@ void AppController::buildSource()
     } else {
         m_source.reset(new DirectSource(*m_net, prepare, removed, ready));
     }
+    return true;
 }
 
 void AppController::showIssue(bool syncNow)
@@ -196,7 +234,7 @@ void AppController::sync(std::function<void(int, int)> progress, std::function<v
         m_source->sync(*m_store, progress, [this, done](QString error) {
             m_syncing = false;
             const ImageStats st = m_images->takeStats();
-            const int images = removeUnusedImages(articlesDir(), imagesDir());
+            const int images = removeUnusedImages(Paths::allArticlesDirs(Paths::dataDir()), imagesDir());
             Log::write(QStringLiteral("sync: images fetched=%1 failed=%2 KB=%3, cleanup images=%4")
                            .arg(st.fetched).arg(st.failed).arg(st.bytes / 1024).arg(images));
             Log::write(QStringLiteral("sync done: %1").arg(error.isEmpty() ? QStringLiteral("ok") : error));
@@ -205,6 +243,44 @@ void AppController::sync(std::function<void(int, int)> progress, std::function<v
                 m_updates->run(); // once per start, while the network is up
             }
             done(error);
+        });
+    });
+}
+
+void AppController::fetchFullText(qint64 id, std::function<void(QString)> done)
+{
+    if (m_syncing)
+        return done(tx("Дождитесь конца обновления"));
+    if (!m_miniflux)
+        return done(failText(ApiFail::NotMiniflux));
+    m_syncing = true;
+    auto finish = [this, done](QString error) {
+        m_syncing = false;
+        if (!error.isEmpty())
+            Log::write(QStringLiteral("full text: %1").arg(error));
+        done(error);
+    };
+    ensureNetwork([this, id, finish](bool ok) {
+        if (!ok)
+            return finish(tx("Нет Wi-Fi"));
+        m_api->fetchContent(id, [this, id, finish](ApiFail fail, QString html) {
+            if (fail != ApiFail::None)
+                return finish(failText(fail));
+            Entry updated = m_store->entry(id);
+            const QString teaser = updated.html;
+            if (updated.id == 0 || !updateFullText(updated, html))
+                return finish(tx("Miniflux не смог получить полный текст"));
+            updated.html = keepLeadImage(teaser, updated.html);
+            m_store->clearFullTextFailures(id);
+            m_store->upsertEntries({updated});
+            PrepareFn prepare = makePrepare(*m_images, articlesDir(), m_config.images);
+            prepare(updated, [this, id, finish](bool saved) {
+                if (!saved)
+                    return finish(tx("Не удалось сохранить статьи на читалку"));
+                removeUnusedImages(Paths::allArticlesDirs(Paths::dataDir()), imagesDir());
+                Log::write(QStringLiteral("full text: article %1 updated").arg(id));
+                finish(QString());
+            });
         });
     });
 }
@@ -228,11 +304,25 @@ void AppController::connectMiniflux(const MinifluxAuth &auth, std::function<void
             if (fail != ApiFail::None)
                 return done(ConnectResult::Failed, failText(fail));
             Log::write(QStringLiteral("connected to Miniflux as %1").arg(user));
+            const QString accountUser = user.isEmpty() ? auth.user : user;
+            const QString profile = accountUser.isEmpty() ? QString() : minifluxAccountKey(auth, accountUser);
+            if (!profile.isEmpty() && m_config.profile.isEmpty()) {
+                const bool sameNamedAccount = !m_config.auth.user.isEmpty()
+                    && minifluxAccountKey(m_config.auth, m_config.auth.user) == profile;
+                const bool sameTokenAccount = m_config.auth.user.isEmpty() && m_config.auth.token == auth.token
+                    && m_config.auth.server == auth.server;
+                if (sameNamedAccount || sameTokenAccount)
+                    migrateLegacyAccount(profile);
+            }
             Config c = m_config;
             c.mode = Config::Miniflux;
             c.auth = auth;
-            updateConfig(c);
-            buildSource();
+            c.auth.user = accountUser;
+            c.profile = profile;
+            if (!updateConfig(c))
+                return done(ConnectResult::Failed, tx("Не удалось сохранить настройки"));
+            if (!buildSource())
+                return done(ConnectResult::Failed, tx("Не удалось открыть локальную базу данных"));
             done(ConnectResult::Ok, QString());
             showIssue(true);
         });
@@ -244,7 +334,7 @@ bool AppController::canReadOffline() const
     if (m_config.auth.server.isEmpty())
         return false;
     Store store;
-    return store.open(Paths::dataDir() + QStringLiteral("/feeds-miniflux.db")) && !store.allIds().isEmpty();
+    return store.open(Paths::minifluxDatabase(Paths::dataDir(), m_config.profile)) && !store.allIds().isEmpty();
 }
 
 void AppController::openOffline()
@@ -253,8 +343,8 @@ void AppController::openOffline()
         return;
     Config c = m_config;
     c.mode = Config::Miniflux;
-    updateConfig(c);
-    buildSource();
+    if (!updateConfig(c) || !buildSource())
+        return;
     showIssue(false);
 }
 
@@ -264,8 +354,8 @@ void AppController::startDirect()
         return;
     Config c = m_config;
     c.mode = Config::Direct;
-    updateConfig(c);
-    buildSource();
+    if (!updateConfig(c) || !buildSource())
+        return;
     const QString opml = DirectSource::findOpml(storageRoot());
     if (!opml.isEmpty()) {
         QFile f(opml);
@@ -283,7 +373,8 @@ void AppController::resetConnection()
         return;
     Config c = m_config;
     c.mode = Config::None;
-    updateConfig(c);
+    if (!updateConfig(c))
+        return;
     m_source.reset();
     m_miniflux = nullptr;
     m_api.reset();

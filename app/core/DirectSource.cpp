@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QSet>
 
 #include <memory>
 
@@ -23,6 +24,8 @@ struct DirectRun {
     Source::Progress progress;
     std::function<void(QString)> done;
     QList<Feed> feeds;
+    QSet<qint64> prepared;
+    bool prepareFailed = false;
     int offline = 0; // feeds that got no answer at all
     QElapsedTimer started;
     QElapsedTimer feedStarted;
@@ -37,7 +40,11 @@ void prepareEntries(const Run &r, QList<Entry> entries, std::function<void()> ne
     if (entries.isEmpty() || !r->prepare)
         return next();
     const Entry e = entries.takeFirst();
-    r->prepare(e, [r, entries, next] { prepareEntries(r, entries, next); });
+    r->prepared.insert(e.id);
+    r->prepare(e, [r, entries, next](bool saved) {
+        r->prepareFailed |= !saved;
+        prepareEntries(r, entries, next);
+    });
 }
 
 void finishRun(const Run &r)
@@ -45,8 +52,14 @@ void finishRun(const Run &r)
     const QList<qint64> removed = r->store->removeReadExcept(DirectSource::kKeepRead);
     if (r->removed && !removed.isEmpty())
         r->removed(removed);
-    r->store->setMeta(QStringLiteral("lastSync"), QString::number(QDateTime::currentSecsSinceEpoch()));
     const bool allOffline = !r->feeds.isEmpty() && r->offline == r->feeds.size();
+    if (!allOffline)
+        r->store->setMeta(QStringLiteral("lastSync"), QString::number(QDateTime::currentSecsSinceEpoch()));
+    if (r->prepareFailed) {
+        Log::write(QStringLiteral("sync: failed at prepare: cannot save one or more articles"));
+        r->done(tx("Не удалось сохранить статьи на читалку"));
+        return;
+    }
     Log::write(QStringLiteral("sync: done in %1 ms, feeds=%2 offline=%3, cleanup articles=%4")
                    .arg(r->started.elapsed()).arg(r->feeds.size()).arg(r->offline).arg(removed.size()));
     r->done(allOffline ? tx("Нет связи с интернетом") : QString());
@@ -59,7 +72,7 @@ void feedFrom(const Run &r, int i)
         QList<Entry> missing;
         if (r->ready)
             for (qint64 id : r->store->allIds())
-                if (!r->ready(id))
+                if (!r->prepared.contains(id) && !r->ready(id))
                     missing << r->store->entry(id);
         return prepareEntries(r, missing, [r] { finishRun(r); });
     }
@@ -91,8 +104,12 @@ void feedFrom(const Run &r, int i)
                 for (Entry e : parsed.entries) {
                     if (!e.published.isValid())
                         e.published = now;
-                    if (e.published < oldest || r->store->known(e.id))
-                        continue; // known articles keep their local read status
+                    const qint64 legacyId = e.id;
+                    e.id = entryId(feed.url + QLatin1Char('\n') + e.sourceKey);
+                    const Entry legacy = r->store->entry(legacyId);
+                    const bool legacyMine = legacy.id ? legacy.feedId == feed.id : r->store->known(legacyId);
+                    if (e.published < oldest || legacyMine || r->store->known(e.id))
+                        continue; // known articles keep their local read status and legacy ids
                     e.feedId = feed.id;
                     e.read = false;
                     fresh << e;

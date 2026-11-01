@@ -2,9 +2,26 @@
 
 #include "FileIO.h"
 
+#include <QCryptographicHash>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QUrlQuery>
+
+QString minifluxAccountKey(const MinifluxAuth &auth, const QString &user)
+{
+    QUrl server = auth.server.adjusted(QUrl::NormalizePathSegments);
+    server.setUserName(QString());
+    server.setPassword(QString());
+    server.setQuery(QUrlQuery());
+    server.setFragment(QString());
+    QString path = server.path();
+    while (path.endsWith(QLatin1Char('/')))
+        path.chop(1);
+    server.setPath(path);
+    const QByteArray identity = (server.toString(QUrl::FullyEncoded) + QLatin1Char('\n') + user).toUtf8();
+    return QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex().left(24));
+}
 
 Config loadConfig(const QString &path)
 {
@@ -22,6 +39,7 @@ Config loadConfig(const QString &path)
     c.auth.token = o.value("token").toString().trimmed();
     c.auth.user = o.value("user").toString().trimmed();
     c.auth.password = o.value("password").toString();
+    c.profile = o.value("profile").toString();
     c.limit = o.value("limit").toInt(c.limit);
     if (c.limit <= 0)
         c.limit = 200;
@@ -47,6 +65,7 @@ bool saveConfig(const QString &path, const Config &c)
     o.insert("token", c.auth.token);
     o.insert("user", c.auth.user);
     o.insert("password", c.auth.password);
+    o.insert("profile", c.profile);
     o.insert("limit", c.limit);
     o.insert("fontPt", c.fontPt);
     o.insert("fontFamily", c.fontFamily);

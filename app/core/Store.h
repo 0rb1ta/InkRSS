@@ -2,6 +2,7 @@
 
 #include "Models.h"
 
+#include <QSet>
 #include <QString>
 
 // Local copy of folders, feeds and articles plus the queue of status changes not yet sent to the
@@ -17,8 +18,8 @@ public:
 
     void replaceCategories(const QList<Category> &categories);
     qint64 addCategory(const QString &title); // existing id when the title is taken
-    // Feeds missing from the new list are removed together with their articles.
-    void replaceFeeds(const QList<Feed> &feeds);
+    // Feeds missing from the new list are removed together with their articles; returns those article ids.
+    QList<qint64> replaceFeeds(const QList<Feed> &feeds);
     qint64 addFeed(const Feed &feed); // id 0: a new id is assigned
     QList<qint64> removeFeed(qint64 feedId); // returns the ids of the articles removed with it
     void setFeedError(qint64 feedId, const QString &error);
@@ -44,8 +45,9 @@ public:
     void setRead(qint64 id, bool read);
     void setStarred(qint64 id, bool starred);
     void markAllRead(qint64 feedId, qint64 categoryId);
-    // Applies a status learned from the source without queueing anything.
+    // Applies statuses learned from the source without queueing or overriding pending local changes.
     void setReadFromSource(const QList<qint64> &ids);
+    void setStarredFromSource(const QSet<qint64> &ids);
 
     QList<StatusChange> pendingChanges() const;
     void clearChanges(const QList<StatusChange> &sent);
@@ -56,6 +58,9 @@ public:
     // Articles whose full text the server failed to extract: not asked for again.
     void setNoFullText(qint64 id);
     bool noFullText(qint64 id) const;
+    void noteFullTextFailure(qint64 id);
+    void clearFullTextFailures(qint64 id);
+    int fullTextFailures(qint64 id) const;
 
     QString meta(const QString &key) const;
     void setMeta(const QString &key, const QString &value);

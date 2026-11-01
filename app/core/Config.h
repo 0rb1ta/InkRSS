@@ -8,6 +8,7 @@ struct Config {
     enum Mode { None, Miniflux, Direct };
     Mode mode = None;
     MinifluxAuth auth;
+    QString profile; // opaque id of the server account that owns the local data
     int limit = 200; // newest unread articles fetched per sync
     int fontPt = 0;  // article font size; 0 = default
     QString fontFamily; // article font; empty = default
@@ -21,5 +22,6 @@ struct Config {
     int headlineSize = kHeadlineSizeDefault;
 };
 
+QString minifluxAccountKey(const MinifluxAuth &auth, const QString &user);
 Config loadConfig(const QString &path);
 bool saveConfig(const QString &path, const Config &config);

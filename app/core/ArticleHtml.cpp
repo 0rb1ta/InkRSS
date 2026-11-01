@@ -3,6 +3,7 @@
 #include "FileIO.h"
 #include "ImageCache.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
@@ -168,30 +169,115 @@ QString fitImages(const QString &html, int maxWidth, int maxHeight,
     return out;
 }
 
+QString keepLeadImage(const QString &teaserHtml, const QString &fullHtml)
+{
+    if (fullHtml.contains(QLatin1String("<img"), Qt::CaseInsensitive))
+        return fullHtml;
+    static const QRegularExpression figure(QStringLiteral("<figure\\b[^>]*>.*?</figure\\s*>"),
+                                           QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    const auto leadFigure = figure.match(teaserHtml);
+    if (leadFigure.hasMatch())
+        return leadFigure.captured(0) + fullHtml;
+    static const QRegularExpression img(QStringLiteral("<img\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    const auto leadImage = img.match(teaserHtml);
+    return leadImage.hasMatch() ? leadImage.captured(0) + fullHtml : fullHtml;
+}
+
+QString blockLayout(const QString &html)
+{
+    static const QRegularExpression containers(
+        QStringLiteral("<(/?)(?:figure|section|article|header|footer|aside|main|nav|picture)\\b[^>]*>"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression captionOpen(QStringLiteral("<figcaption\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression captionClose(QStringLiteral("</figcaption\\s*>"), QRegularExpression::CaseInsensitiveOption);
+    QString out = html;
+    out.replace(containers, QStringLiteral("<\\1div>"));
+    out.replace(captionOpen, QStringLiteral("<p class=\"caption\">"));
+    out.replace(captionClose, QStringLiteral("</p>"));
+    return out;
+}
+
 QString articlePath(const QString &articlesDir, qint64 id)
 {
     return articlesDir + QStringLiteral("/%1.html").arg(id);
 }
 
+QString retryPath(const QString &articlesDir, qint64 id)
+{
+    return articlePath(articlesDir, id) + QStringLiteral(".missing");
+}
+
+QByteArray articleFingerprint(const QString &html)
+{
+    return QCryptographicHash::hash(html.toUtf8(), QCryptographicHash::Sha1).toHex();
+}
+
+int imageAttempts(const QString &path, const QByteArray &fingerprint = {})
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return 0;
+    const QList<QByteArray> lines = f.readAll().trimmed().split('\n');
+    if (!fingerprint.isEmpty() && lines.value(0) != fingerprint)
+        return 0;
+    return qMax(0, lines.value(1).toInt());
+}
+
+bool localImagesExist(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    static const QRegularExpression img(QStringLiteral("<img src=\"([^\"]*)\""));
+    const QString html = QString::fromUtf8(f.readAll());
+    auto it = img.globalMatch(html);
+    while (it.hasNext()) {
+        const QUrl url(unescapeAttr(it.next().captured(1)));
+        if (url.isLocalFile() && !QFile::exists(url.toLocalFile()))
+            return false;
+    }
+    return true;
+}
+
+bool articleReady(const QString &articlesDir, qint64 id)
+{
+    const QString page = articlePath(articlesDir, id);
+    if (!QFile::exists(page))
+        return false;
+    const QString retries = retryPath(articlesDir, id);
+    if (QFile::exists(retries))
+        return imageAttempts(retries) >= kMaxImageAttempts;
+    return localImagesExist(page);
+}
+
 void removeArticleFiles(const QString &articlesDir, const QList<qint64> &ids)
 {
-    for (qint64 id : ids)
+    for (qint64 id : ids) {
         QFile::remove(articlePath(articlesDir, id));
+        QFile::remove(retryPath(articlesDir, id));
+    }
 }
 
 int removeUnusedImages(const QString &articlesDir, const QString &imagesDir)
 {
+    return removeUnusedImages(QList<QString>{articlesDir}, imagesDir);
+}
+
+int removeUnusedImages(const QList<QString> &articlesDirs, const QString &imagesDir)
+{
     static const QRegularExpression name(QStringLiteral("/([0-9a-f]+\\.png)\""));
     QSet<QString> used;
-    const QDir articles(articlesDir);
-    for (const QString &file : articles.entryList({QStringLiteral("*.html")}, QDir::Files)) {
-        QFile f(articles.filePath(file));
-        if (!f.open(QIODevice::ReadOnly))
-            continue;
-        const QString html = QString::fromUtf8(f.readAll());
-        auto it = name.globalMatch(html);
-        while (it.hasNext())
-            used.insert(it.next().captured(1));
+    for (const QString &articlesDir : articlesDirs) {
+        const QDir articles(articlesDir);
+        for (const QString &file : articles.entryList({QStringLiteral("*.html")}, QDir::Files)) {
+            QFile f(articles.filePath(file));
+            if (!f.open(QIODevice::ReadOnly))
+                continue;
+            const QString html = QString::fromUtf8(f.readAll());
+            auto it = name.globalMatch(html);
+            while (it.hasNext())
+                used.insert(it.next().captured(1));
+        }
     }
     int removed = 0;
     const QDir images(imagesDir);
@@ -209,21 +295,50 @@ QString withoutImages(const QString &html)
     return out;
 }
 
+QString articleStyleSheet()
+{
+    return QStringLiteral("body, p, h1, h2, h3, li { color: #000; }"
+                          " h1 { font-size: 140%; margin-top: 0; margin-bottom: 0.1em; }"
+                          " p { margin-top: 0; margin-bottom: 0.3em; } .meta { color: #333; font-size: 75%; }"
+                          " .caption { color: #333; font-size: 80%; }"
+                          " a { color: #000; text-decoration: underline; }");
+}
+
+int articleImageMaxHeight(int pageHeight)
+{
+    return pageHeight * 30 / 100;
+}
+
 PrepareFn makePrepare(ImageCache &cache, const QString &articlesDir, bool images)
 {
     ImageCache *c = &cache;
-    return [c, articlesDir, images](const Entry &entry, std::function<void()> done) {
+    return [c, articlesDir, images](const Entry &entry, std::function<void(bool)> done) {
         const CleanArticle clean = cleanHtml(entry.html, QUrl(entry.url));
+        const QString page = articlePath(articlesDir, entry.id);
+        const QString retries = retryPath(articlesDir, entry.id);
         if (!images) {
             QDir().mkpath(articlesDir);
-            writeFileIfChanged(articlePath(articlesDir, entry.id), withoutImages(clean.html).toUtf8());
-            done();
+            const bool saved = writeFileIfChanged(page, withoutImages(clean.html).toUtf8());
+            if (saved)
+                QFile::remove(retries);
+            done(saved);
             return;
         }
-        c->fetch(clean.images, [c, clean, articlesDir, id = entry.id, done] {
+        const QByteArray fingerprint = articleFingerprint(entry.html);
+        c->fetch(clean.images, [c, clean, articlesDir, page, retries, fingerprint, done] {
             QDir().mkpath(articlesDir);
-            writeFileIfChanged(articlePath(articlesDir, id), withLocalImages(clean.html, *c).toUtf8());
-            done();
+            bool missing = false;
+            for (const QUrl &url : clean.images)
+                missing |= c->localPath(url).isEmpty();
+            const bool saved = writeFileIfChanged(page, withLocalImages(clean.html, *c).toUtf8());
+            bool tracked = true;
+            if (saved) {
+                if (missing)
+                    tracked = writeFileIfChanged(retries, fingerprint + '\n' + QByteArray::number(imageAttempts(retries, fingerprint) + 1));
+                else
+                    QFile::remove(retries);
+            }
+            done(saved && tracked);
         });
     };
 }

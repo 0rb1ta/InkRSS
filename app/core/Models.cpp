@@ -56,3 +56,12 @@ int textLength(const QString &html)
 {
     return plainText(html).size();
 }
+
+bool updateFullText(Entry &entry, const QString &html)
+{
+    if (textLength(html) <= textLength(entry.html))
+        return false;
+    entry.html = html;
+    entry.readingMinutes = readingMinutes(html);
+    return true;
+}

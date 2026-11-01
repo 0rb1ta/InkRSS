@@ -31,11 +31,13 @@ struct Entry {
     bool starred = false;
     QDateTime changed; // last status change, UTC, whole seconds
     int readingMinutes = 0;
+    QString sourceKey; // GUID, Atom id or fallback key in direct-feed mode
 };
 
 // A status change made on the reader that the source has not been told about yet.
 struct StatusChange {
     enum Kind { Read, Unread, Star, Unstar, AllRead };
+    qint64 seq = 0;
     qint64 entryId = 0;
     Kind kind = Read;
     qint64 feedId = -1;     // AllRead: the feed, or -1
@@ -50,3 +52,5 @@ int textLength(const QString &html);
 int readingMinutes(const QString &html);
 // The visible text itself, with the same rules.
 QString plainText(const QString &html);
+// Replaces a teaser only with richer content and recalculates reading time; other fields stay intact.
+bool updateFullText(Entry &entry, const QString &html);
